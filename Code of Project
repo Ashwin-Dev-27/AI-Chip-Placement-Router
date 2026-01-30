@@ -1,0 +1,197 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import random
+import time
+from IPython.display import clear_output
+
+# ==========================================
+# 1. DEFINE THE ENVIRONMENT (The Chip)
+# ==========================================
+
+class ChipGrid:
+    def __init__(self, size=10):
+        self.size = size
+        self.grid = np.zeros((size, size))
+        
+        # Define start and end points
+        self.start = (0, 0)
+        self.target = (size-1, size-1)
+        self.agent_pos = self.start
+        
+        # Actions: 0=Up, 1=Down, 2=Left, 3=Right
+        self.action_space = [0, 1, 2, 3]
+        
+        # PLACING OBSTACLES (The logic gates/macros)
+        # -1 represents a wall/obstacle
+        self.grid[3:6, 4] = -1  # Vertical wall
+        self.grid[5, 2:5] = -1  # Horizontal wall
+
+    def reset(self):
+        # Put agent back to start for new episode
+        self.agent_pos = self.start
+        return self.agent_pos
+
+    def step(self, action):
+        # Get current position
+        y, x = self.agent_pos
+        
+        # Calculate move based on action
+        if action == 0:   # Up
+            y = max(0, y - 1)
+        elif action == 1: # Down
+            y = min(self.size - 1, y + 1)
+        elif action == 2: # Left
+            x = max(0, x - 1)
+        elif action == 3: # Right
+            x = min(self.size - 1, x + 1)
+            
+        new_pos = (y, x)
+        
+        # RULE 1: Check for collision (Did we hit a wall?)
+        if self.grid[new_pos] == -1:
+            # Heavy penalty for hitting a wall
+            return self.agent_pos, -10, False 
+        
+        # RULE 2: Check if reached target
+        self.agent_pos = new_pos
+        if new_pos == self.target:
+            # Big reward for finishing
+            return new_pos, 100, True 
+            
+        # RULE 3: Standard step cost
+        # Small penalty to encourage shortest path
+        return new_pos, -1, False
+
+    def render(self):
+        # Helper function to draw the grid
+        visual_grid = self.grid.copy()
+        visual_grid[self.start] = 1  # Start is Greenish
+        visual_grid[self.target] = 2 # Target is Reddish
+        visual_grid[self.agent_pos] = 3 # Agent is Blue
+        
+        plt.figure(figsize=(5, 5))
+        sns.heatmap(visual_grid, annot=True, cbar=False, cmap="coolwarm", linewidths=.5)
+        plt.title(f"Current Position: {self.agent_pos}")
+        plt.show()
+
+print("Environment Class Created Successfully.")
+
+# ==========================================
+# 2. TRAIN THE AI (The Learning Loop)
+# ==========================================
+
+# Initialize the environment
+env = ChipGrid()
+
+# Q-Table: The brain of the agent
+# Dictionary mapping (y,x) -> [up, down, left, right] values
+q_table = {}
+for y in range(env.size):
+    for x in range(env.size):
+        q_table[(y, x)] = [0, 0, 0, 0]
+
+# Hyperparameters (The settings)
+alpha = 0.1         # Learning Rate
+gamma = 0.9         # Discount Factor (Future reward importance)
+epsilon = 1.0       # Exploration rate (start with 100% random)
+epsilon_decay = 0.995 
+min_epsilon = 0.01  # Keep 1% randomness so it doesn't get stuck
+
+episodes = 500 # Total runs
+
+print("Starting Training...")
+
+for episode in range(episodes):
+    state = env.reset()
+    done = False
+    
+    while not done:
+        # EXPLORE VS EXPLOIT LOGIC
+        if random.random() < epsilon:
+            action = random.choice(env.action_space) # Random move
+        else:
+            # Pick the best known move
+            # If all zero, pick random
+            if max(q_table[state]) == 0:
+                action = random.choice(env.action_space)
+            else:
+                action = np.argmax(q_table[state])
+
+        # Take the action
+        next_state, reward, done = env.step(action)
+        
+        # THE MATH (Bellman Equation)
+        # Q_new = Q_old + Alpha * (Reward + Gamma * Max_Future - Q_old)
+        old_value = q_table[state][action]
+        next_max = max(q_table[next_state])
+        
+        new_value = old_value + alpha * (reward + gamma * next_max - old_value)
+        q_table[state][action] = new_value
+        
+        state = next_state
+        
+    # Reduce randomness after every episode
+    epsilon = max(min_epsilon, epsilon * epsilon_decay)
+    
+    # Animation: Show progress every 50 episodes
+    if episode % 50 == 0:
+        clear_output(wait=True)
+        print(f"Episode: {episode}")
+        print(f"Current Randomness (Epsilon): {epsilon:.2f}")
+        env.render()
+        
+print("Training Finished!")
+
+# ==========================================
+# 3. TEST RUN & VISUALIZATION
+# ==========================================
+
+print("Testing the trained agent (No randomness)...")
+
+state = env.reset()
+done = False
+path = [state] # Store path to plot later
+
+# Run the agent until it hits target
+while not done:
+    # Always pick the best action now
+    action = np.argmax(q_table[state])
+    next_state, reward, done = env.step(action)
+    state = next_state
+    path.append(state)
+    
+    # Limit steps just in case of infinite loop
+    if len(path) > 30:
+        print("Stopped: Path too long.")
+        break
+
+print(f"Target Reached! Total Steps: {len(path)-1}")
+
+
+# --- PLOT 1: THE PATH ---
+visual_grid = env.grid.copy()
+for p in path:
+    visual_grid[p] = 0.5 # Mark path with a light color
+
+visual_grid[env.start] = 1
+visual_grid[env.target] = 2
+
+plt.figure(figsize=(6, 6))
+sns.heatmap(visual_grid, annot=True, cbar=False, cmap="GnBu", linewidths=.5)
+plt.title(f"Final Optimal Path ({len(path)-1} Steps)")
+plt.show()
+
+
+# --- PLOT 2: THE BRAIN (Heatmap) ---
+# This shows the max Q-value for every spot
+brain_grid = np.zeros((env.size, env.size))
+
+for y in range(env.size):
+    for x in range(env.size):
+        brain_grid[y, x] = max(q_table[(y, x)])
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(brain_grid, cmap="viridis", annot=False, cbar=True)
+plt.title("Agent's Confidence Heatmap")
+plt.show()
